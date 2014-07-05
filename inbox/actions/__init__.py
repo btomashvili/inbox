@@ -1,4 +1,4 @@
-""" Code for propagating Inbox datastore changes to the account backend.
+""" Code for propagating Inbox datastore changes to account backends.
 
 Syncback actions don't update anything in the local datastore; the Inbox
 datastore is updated asynchronously (see namespace.py) and bookkeeping about
@@ -21,15 +21,6 @@ not really a problem because of the limited ways mail messages can change.
 
 ACTIONS MUST BE IDEMPOTENT! We are going to have task workers guarantee
 at-least-once semantics.
-
-** Notes abot per-provider action modules. **
-
-An action module *must* meet the following requirement:
-
-1. Specify the provider it implements as the module-level PROVIDER variable.
-For example, 'gmail', 'imap', 'eas', 'yahoo' etc.
-
-2. Live in the 'actions/' directory.
 """
 # Allow out-of-tree action submodules.
 from pkgutil import extend_path

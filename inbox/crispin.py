@@ -350,6 +350,18 @@ class CrispinClient(object):
         return dict([(long(uid), Flags(msg['FLAGS']))
                      for uid, msg in data.iteritems()])
 
+    def delete_uids(self, uids):
+        uids = [str(u) for u in uids]
+        self.conn.delete_messages(uids)
+        self.conn.expunge()
+
+    def set_unread(self, uids, unread):
+        uids = [str(u) for u in uids]
+        if unread:
+            self.conn.remove_flags(uids, ['\\Seen'])
+        else:
+            self.conn.add_flags(uids, ['\\Seen'])
+
 
 class CondStoreCrispinClient(CrispinClient):
 
