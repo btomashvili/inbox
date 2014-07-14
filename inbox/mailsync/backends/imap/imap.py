@@ -318,7 +318,7 @@ def poll(conn_pool, db_session, log, folder_name, shared_state):
 
 
 def base_poll(crispin_client, db_session, log, folder_name, shared_state,
-              download_fn, msg_create_fn):
+              download_fn, msg_create_fn, update_fn):
     """ Base polling logic for non-CONDSTORE IMAP servers.
 
     Local/remote UID comparison is used to detect new and deleted messages.
@@ -348,6 +348,12 @@ def base_poll(crispin_client, db_session, log, folder_name, shared_state,
                     to_download, local_uids, shared_state['syncmanager_lock'],
                     msg_create_fn)
 
+    potentially_modified_uids = remote_uids - to_download
+    log.info("uids to refresh: {}".format(potentially_modified_uids))
+    if potentially_modified_uids:
+        update_fn(crispin_client, db_session, log, folder_name,
+                  potentially_modified_uids, shared_state['syncmanager_lock'])
+    
     sleep(shared_state['poll_frequency'])
     return 'poll'
 

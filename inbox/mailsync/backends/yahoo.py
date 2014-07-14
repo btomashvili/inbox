@@ -17,9 +17,9 @@ support for this later, but a lack of CONDSTORE makes it tricky / slow.)
 from inbox.crispin import retry_crispin
 from inbox.models.util import reconcile_message
 from inbox.models.backends.imap import ImapThread
-from inbox.mailsync.backends.imap import (account, base_poll, imap_poll_update,
+from inbox.mailsync.backends.imap import (account, base_poll, imap_poll_update, 
                                           resync_uids_from, base_initial_sync,
-                                          imap_initial_sync, ImapSyncMonitor)
+                                          imap_initial_sync, ImapSyncMonitor, update_metadata)
 
 
 PROVIDER = 'yahoo'
@@ -46,7 +46,7 @@ class YahooSyncMonitor(ImapSyncMonitor):
 def poll(conn_pool, db_session, log, folder_name, shared_state):
     with conn_pool.get() as crispin_client:
         return base_poll(crispin_client, db_session, log, folder_name,
-                         shared_state, imap_poll_update, create_yahoo_message)
+                         shared_state, imap_poll_update, create_yahoo_message, update_metadata)
 
 
 @retry_crispin
