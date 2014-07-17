@@ -5,7 +5,9 @@ See imap.py for notes about implementation.
 from sqlalchemy.orm import joinedload
 
 from inbox.actions.backends.imap import uidvalidity_cb, syncback_action
-from inbox.models.backends.imap import ImapThread
+from inbox.models.backends.imap import ImapThread, ImapUid
+from inbox.models.message import Message
+import pdb
 
 PROVIDER = 'yahoo'
 
@@ -25,21 +27,36 @@ def set_remote_archived(account, thread_id, archived, db_session):
 
 
 def set_remote_starred(account, thread_id, starred, db_session):
-    raise NotImplementedError("Yahoo has no 'starred' equivalent")
+    def fn(account, db_session, crispin_client):
+        uids = []
+        # FIXME @karim: We can probably get away with a lighter
+        # query.
+        thread = db_session.query(ImapThread).options(
+            joinedload("messages").joinedload("imapuids"))\
+            .filter_by(id=thread_id).one()
+        import pdb
+        pdb.set_trace()
+
+        for msg in thread.messages:
+            uids.extend([uid.msg_uid for uid in msg.imapuids])
+
+        crispin_client.set_starred(uids, starred)
+
+    return syncback_action(fn, account, account.inbox_folder.name, db_session)
 
 
 def set_remote_unread(account, thread_id, unread, db_session):
     def fn(account, db_session, crispin_client):
         uids = []
         thread = db_session.query(ImapThread).options(
-            joinedload('messages').load_only('id')
-            .joinedload('imapuids').load_only('id'))\
+            joinedload("messages").joinedload("imapuids"))\
             .filter_by(id=thread_id).one()
+
         for msg in thread.messages:
-            uids.extend(msg.imapuids)
+            uids.extend([uid.msg_uid for uid in msg.imapuids])
         crispin_client.set_unread(uids, unread)
 
-    return syncback_action(fn, account, account.all_folder.name, db_session)
+    return syncback_action(fn, account, account.inbox_folder.name, db_session)
 
 
 def remote_move(account, thread_id, from_folder, to_folder, db_session):
@@ -47,43 +64,27 @@ def remote_move(account, thread_id, from_folder, to_folder, db_session):
         return
 
     def fn(account, db_session, crispin_client):
-        inbox_folder = crispin_client.folder_names()['inbox']
-        all_folder = crispin_client.folder_names()['all']
-        if from_folder == inbox_folder:
-            if to_folder == all_folder:
-                return _archive(thread_id, crispin_client)
-            else:
-                g_thrid = _get_g_thrid(account.namespace.id, thread_id,
-                                       db_session)
-                _archive(g_thrid, crispin_client)
-                crispin_client.add_label(g_thrid, to_folder)
-        elif from_folder in crispin_client.folder_names()['labels']:
-            if to_folder in crispin_client.folder_names()['labels']:
-                g_thrid = _get_g_thrid(account.namespace.id, thread_id,
-                                       db_session)
-                crispin_client.add_label(g_thrid, to_folder)
-            elif to_folder == inbox_folder:
-                g_thrid = _get_g_thrid(account.namespace.id, thread_id,
-                                       db_session)
-                crispin_client.copy_thread(g_thrid, to_folder)
-            elif to_folder != all_folder:
-                raise Exception("Should never get here! to_folder: {}"
-                                .format(to_folder))
-            crispin_client.select_folder(crispin_client.folder_names()['all'],
-                                         uidvalidity_cb)
-            crispin_client.remove_label(g_thrid, from_folder)
-            # do nothing if moving to all mail
-        elif from_folder == all_folder:
-            g_thrid = _get_g_thrid(account.namespace.id, thread_id, db_session)
-            if to_folder in crispin_client.folder_names()['labels']:
-                crispin_client.add_label(g_thrid, to_folder)
-            elif to_folder == inbox_folder:
-                crispin_client.copy_thread(g_thrid, to_folder)
-            else:
-                raise Exception("Should never get here! to_folder: {}"
-                                .format(to_folder))
-        else:
-            raise Exception("Unknown from_folder '{}'".format(from_folder))
+        folders = crispin_client.folder_names()
+
+        if from_folder not in folders.values() and \
+           from_folder not in folders["extra"]:
+                raise Exception("Unknown from_folder '{}'".format(from_folder))
+
+        if to_folder not in folders.values() and \
+           to_folder not in folders["extra"]:
+                raise Exception("Unknown to_folder '{}'".format(to_folder))
+
+        crispin_client.select_folder(from_folder, uidvalidity_cb)
+        uids = []
+        thread = db_session.query(ImapThread).options(
+            joinedload("messages").joinedload("imapuids"))\
+            .filter_by(id=thread_id).one()
+
+        for msg in thread.messages:
+            uids.extend([uid.msg_uid for uid in msg.imapuids])
+
+        crispin_client.copy_uids(uids, to_folder)
+        crispin_client.delete_uids(uids)
 
     return syncback_action(fn, account, from_folder, db_session)
 
