@@ -97,14 +97,25 @@ def remote_copy(account, thread_id, from_folder, to_folder, db_session):
         return
 
     def fn(account, db_session, crispin_client):
-        inbox_folder = crispin_client.folder_names()['inbox']
-        all_folder = crispin_client.folder_names()['all']
-        g_thrid = _get_g_thrid(account.namespace.id, thread_id, db_session)
-        if to_folder == inbox_folder:
-            crispin_client.copy_thread(g_thrid, to_folder)
-        elif to_folder != all_folder:
-            crispin_client.add_label(g_thrid, to_folder)
-        # copy a thread to all mail is a noop
+        uids = []
+
+        if from_folder not in folders.values() and \
+           from_folder not in folders["extra"]:
+                raise Exception("Unknown from_folder '{}'".format(from_folder))
+
+        if to_folder not in folders.values() and \
+           to_folder not in folders["extra"]:
+                raise Exception("Unknown to_folder '{}'".format(to_folder))
+
+
+        thread = db_session.query(ImapThread).options(
+            joinedload("messages").joinedload("imapuids"))\
+            .filter_by(id=thread_id).one()
+
+        for msg in thread.messages:
+            uids.extend([uid.msg_uid for uid in msg.imapuids])
+
+        crispin_client.copy_uids(uids, to_folder)
 
     return syncback_action(fn, account, from_folder, db_session)
 
