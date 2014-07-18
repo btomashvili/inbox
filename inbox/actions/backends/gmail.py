@@ -106,7 +106,7 @@ def remote_move(account, thread_id, from_folder_name, to_folder_name,
             raise Exception("Unknown from_folder_name '{}'".
                             format(from_folder_name))
 
-    return _syncback_action(fn, account, from_folder_name, db_session)
+    return syncback_action(fn, account, from_folder_name, db_session)
 
 
 def _remote_copy(account, thread_id, from_folder, to_folder, db_session):
