@@ -6,7 +6,7 @@ from sqlalchemy.orm import joinedload
 
 from inbox.actions.backends.imap import uidvalidity_cb, syncback_action
 from inbox.models.backends.imap import ImapThread, ImapUid
-from inbox.models.message import Message
+from inbox.models.message import Message, SpoolMessage
 import pdb
 
 PROVIDER = 'yahoo'
@@ -98,6 +98,7 @@ def remote_copy(account, thread_id, from_folder, to_folder, db_session):
 
     def fn(account, db_session, crispin_client):
         uids = []
+        folders = crispin_client.folder_names()
 
         if from_folder not in folders.values() and \
            from_folder not in folders["extra"]:
@@ -122,11 +123,21 @@ def remote_copy(account, thread_id, from_folder, to_folder, db_session):
 
 def remote_delete(account, thread_id, folder_name, db_session):
     def fn(account, db_session, crispin_client):
-        crispin_client.delete_messages(uids)
+        uids = []
+
+        thread = db_session.query(ImapThread).options(
+            joinedload("messages").joinedload("imapuids"))\
+            .filter_by(id=thread_id).one()
+
+        for msg in thread.messages:
+            uids.extend([uid.msg_uid for uid in msg.imapuids])
+
+        crispin_client.delete_uids(uids)
 
     return syncback_action(fn, account, folder_name, db_session)
 
-
+# FIXME @karim: Why do we pass folder_name to the function if we just use it
+# to check it's equal to "Drafts"?
 def remote_save_draft(account, folder_name, message, db_session, date=None):
     def fn(account, db_session, crispin_client):
         assert folder_name == crispin_client.folder_names()['drafts']
@@ -138,6 +149,7 @@ def remote_save_draft(account, folder_name, message, db_session, date=None):
 def remote_delete_draft(account, folder_name, inbox_uid, db_session):
     def fn(account, db_session, crispin_client):
         assert folder_name == crispin_client.folder_names()['drafts']
+        db_session.query(SpoolMessage).options(joinedload("imapuids")).filter_by(public_id=inbox_uid).one()
         crispin_client.delete_draft(inbox_uid)
 
     return syncback_action(fn, account, folder_name, db_session)
