@@ -1,13 +1,10 @@
-
 from contextlib import contextmanager
 
-from sqlalchemy import Column, Integer, MetaData
 from sqlalchemy.orm.session import Session
 from sqlalchemy.orm.interfaces import MapperOption
-from sqlalchemy.ext.declarative import as_declarative, declared_attr
 from sqlalchemy.orm.exc import NoResultFound
 
-import sqlalchemy.orm.session
+import sqlalchemy.orm.query
 
 from inbox.log import get_logger
 log = get_logger()
@@ -151,6 +148,7 @@ class InboxSession(object):
 
 
 cached_engine = None
+
 
 @contextmanager
 def session_scope(versioned=True, ignore_soft_deletes=True, namespace_id=None):
