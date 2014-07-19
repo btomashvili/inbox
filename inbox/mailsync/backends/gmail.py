@@ -200,6 +200,7 @@ def gmail_highestmodseq_update(crispin_client, db_session, log, folder_name,
                     uid, g_metadata[uid], flags[uid].flags, flags[uid].labels))
         download_queued_threads(crispin_client, db_session, log, folder_name,
                                 message_download_stack, syncmanager_lock)
+
     elif folder_name in uid_download_folders(crispin_client):
         uid_download_stack = uid_list_to_stack(to_download)
         download_queued_uids(crispin_client, db_session, log, folder_name,
@@ -257,7 +258,8 @@ def gmail_download_and_commit_uids(crispin_client, db_session, log,
         # there is the possibility that another green thread has already
         # downloaded some message(s) from this batch... check within the lock
         raw_messages = deduplicate_message_object_creation(
-            crispin_client.account_id, db_session, log, raw_messages)
+            crispin_client.account_id, crispin_client.selected_folder_name,
+            db_session, log, raw_messages)
         log.debug(unsaved_message_object_count=len(raw_messages))
         new_imapuids = create_db_objects(crispin_client.account_id, db_session,
                                          log, folder_name, raw_messages,
@@ -265,6 +267,41 @@ def gmail_download_and_commit_uids(crispin_client, db_session, log,
         commit_uids(db_session, log, new_imapuids)
         log.debug(new_committed_message_count=len(new_imapuids))
     return len(new_imapuids)
+
+
+def deduplicate_message_object_creation(account_id, folder_name,
+                                        db_session, log, raw_messages):
+    """ Deduplicate message object creation using X-GM-MSGID.
+
+    Creates ImapUid entries for messages for which we already have Message
+    objects.
+
+    The calling thread *must* hold `syncmanager_lock`.
+
+    Returns
+    -------
+    list
+        Deduplicated UIDs.
+    """
+    new_g_msgids = {msg.g_msgid for msg in raw_messages}
+    local_g_msgids = set(account.g_msgids(account_id, db_session,
+                                          in_=new_g_msgids))
+    log.info('deduplicating message object creation',
+             new_g_msgids=new_g_msgids, local_g_msgids=local_g_msgids)
+    full_download, imapuid_only = partition(
+        lambda msg: msg.g_msgid in local_g_msgids, raw_messages)
+
+    if imapuid_only:
+        log.info('creating imapuids for already-created messages',
+                 uids=imapuid_only)
+        acc = db_session.query(GmailAccount).get(account_id)
+        msgs = [GMessage(msg.uid, GMetadata(msg.g_msgid, msg.g_thrid),
+                         msg.flags, msg.g_labels) for msg in raw_messages]
+        add_missing_imapuids(db_session, acc, log, folder_name, msgs)
+    else:
+        log.info('no deduplication necessary')
+
+    return full_download
 
 
 def check_new_g_thrids(account_id, provider, folder_name, log,
@@ -355,9 +392,9 @@ def download_queued_threads(crispin_client, db_session, log, folder_name,
 
     """
     num_total_messages = message_download_stack.qsize()
-    log.info(num_total_messages=num_total_messages)
 
-    log.info('Expanding threads and downloading messages.')
+    log.info('expanding threads and downloading messages',
+             num_total_messages=num_total_messages)
     # We still need the original crispin connection for progress reporting,
     # so the easiest thing to do here with the current pooling setup is to
     # create a new crispin client for querying All Mail.
@@ -392,22 +429,24 @@ def download_queued_threads(crispin_client, db_session, log, folder_name,
             download_thread(all_mail_crispin_client, db_session, log,
                             syncmanager_lock, thread_g_metadata,
                             message.g_metadata.thrid, thread_uids)
-            # In theory we only ever have one Greenlet modifying ImapUid
-            # entries for a non-All Mail folder, but grab the lock anyway
-            # to be safe.
+
+            # Since we download msgs from All Mail, we need to separately
+            # make sure we have ImapUids recorded for this folder (used in
+            # progress tracking, queuing, and delete detection).
+            #
+            # NOTE: This is the *only* place we create ImapUids for thread-
+            # expanded folders. Deduplication only creates All Mail entries.
             with syncmanager_lock:
-                log.debug('download_queued_threads acquired syncmanager_lock')
-                # Since we download msgs from All Mail, we need to separately
-                # make sure we have ImapUids recorded for this folder (used in
-                # progress tracking, queuing, and delete detection).
-                log.debug('adding imapuid rows', count=len(processed_msgs))
-                for msg in processed_msgs:
-                    add_new_imapuid(db_session, log, msg, folder_name, acc)
+                # In theory we only ever have one Greenlet modifying ImapUid
+                # entries for a non-All Mail folder, but grab the lock anyway
+                # to be safe.
+                add_missing_imapuids(db_session, acc, log, folder_name,
+                                     processed_msgs)
 
             report_progress(crispin_client, db_session, log, folder_name,
                             len(processed_msgs),
                             message_download_stack.qsize())
-        log.info('Message download queue emptied')
+        log.info('message download queue emptied')
     # Intentionally don't report which UIDVALIDITY we've saved messages to
     # because we have All Mail selected and don't have the UIDVALIDITY for
     # the folder we're actually downloading messages for.
@@ -419,9 +458,11 @@ def download_thread(crispin_client, db_session, log, syncmanager_lock,
     Download all messages in thread identified by `g_thrid`.
 
     Messages are downloaded most-recent-first via All Mail, which allows us to
-    get the entire thread regardless of which folders it's in.
+    get the entire thread regardless of which folder/label it's in.
 
     """
+    assert crispin_client.selected_folder_name == \
+        crispin_client.folder_names()['all']
     log.debug('downloading thread',
               g_thrid=g_thrid, message_count=len(thread_uids))
     to_download = deduplicate_message_download(crispin_client, db_session, log,
@@ -436,20 +477,13 @@ def download_thread(crispin_client, db_session, log, syncmanager_lock,
     return len(to_download)
 
 
-def deduplicate_message_object_creation(account_id, db_session, log,
-                                        raw_messages):
-    log.info('Deduplicating message object creation.')
-    new_g_msgids = {msg.g_msgid for msg in raw_messages}
-    existing_g_msgids = set(account.g_msgids(account_id, db_session,
-                                             in_=new_g_msgids))
-    return [msg for msg in raw_messages if msg.g_msgid not in
-            existing_g_msgids]
-
-
 def deduplicate_message_download(crispin_client, db_session, log,
                                  syncmanager_lock, remote_g_metadata, uids):
     """
     Deduplicate message download using X-GM-MSGID.
+
+    Creates missing ImapUid entries for the currently selected IMAP folder,
+    which must be the folder we're given the `remote_g_metadata` for.
 
     Returns
     -------
@@ -468,107 +502,66 @@ def deduplicate_message_download(crispin_client, db_session, log,
         sorted(uids, key=int))
     if imapuid_only:
         log.info('skipping already downloaded uids', count=len(imapuid_only))
-        # Since we always download messages via All Mail and create the
-        # relevant All Mail ImapUids too at that time, we don't need to create
-        # them again here if we're deduping All Mail downloads.
-        if crispin_client.selected_folder_name != \
-                crispin_client.folder_names()['all']:
-            add_new_imapuids(crispin_client, log, db_session,
-                             remote_g_metadata, syncmanager_lock, imapuid_only)
+        flags = crispin_client.flags(uids)
+        acc = db_session.query(GmailAccount).get(crispin_client.account_id)
+        with syncmanager_lock:
+            msgs = [GMessage(uid, remote_g_metadata[uid], flags[uid].flags,
+                             flags[uid].labels) for uid in
+                    imapuid_only if uid in flags]
+            add_missing_imapuids(db_session, acc, log,
+                                 crispin_client.selected_folder_name, msgs)
 
     return full_download
 
 
-def add_new_imapuid(db_session, log, gmessage, folder_name, acc):
-    """
-    Add ImapUid object for this GMessage if we don't already have one.
+def add_missing_imapuids(db_session, acc, log, folder_name, msgs):
+    """ Create ImapUid entries from GMessage objects.
 
-    Parameters
-    ----------
-    message : GMessage
-        Message to add ImapUid for.
-    folder_name : str
-        Which folder to add the ImapUid in.
-    acc : GmailAccount
-        Which account to associate the message with. (Not looking this up
-        within this function is a db access optimization.)
+    Skips creation if the ImapUid entry is already there.
 
     """
-    if not db_session.query(ImapUid.msg_uid).join(Folder).filter(
-            Folder.name == folder_name,
-            ImapUid.account_id == acc.id,
-            ImapUid.msg_uid == gmessage.uid).all():
-        message = db_session.query(Message).join(ImapThread).filter(
-            ImapThread.g_thrid == gmessage.g_metadata.thrid,
-            Message.g_thrid == gmessage.g_metadata.thrid,
-            Message.g_msgid == gmessage.g_metadata.msgid,
-            ImapThread.namespace_id == acc.namespace.id).one()
-        new_imapuid = ImapUid(
-            account=acc,
-            folder=Folder.find_or_create(db_session, acc, folder_name),
-            msg_uid=gmessage.uid, message=message)
-        new_imapuid.update_imap_flags(gmessage.flags, gmessage.labels)
-        db_session.add(new_imapuid)
-        db_session.commit()
-    else:
-        log.debug('skipping imapuid creation', uid=gmessage.uid)
+    folder = Folder.find_or_create(db_session, acc, folder_name)
+    log.debug('adding imapuid rows', count=len(msgs))
+    # We may already have ImapUid entries for some messages, since
+    # if the Message already existed we create them right away.
+    new_uids = {msg.uid for msg in msgs}
+    local_folder_uids = {uid for uid, in
+                         db_session.query(ImapUid.msg_uid)
+                         .filter(
+                             ImapUid.account_id == acc.id,
+                             ImapUid.folder_id == folder.id,
+                             ImapUid.msg_uid.in_(new_uids))}
+
+    to_add = new_uids - local_folder_uids
+    for msg in msgs:
+        if msg.uid in to_add:
+            new_imapuid = create_gmail_imapuid(
+                db_session, msg.uid, msg.g_metadata.msgid,
+                msg.g_metadata.thrid, msg.flags, msg.labels,
+                folder, acc)
+            db_session.add(new_imapuid)
+    db_session.commit()
 
 
-def add_new_imapuids(crispin_client, log, db_session, remote_g_metadata,
-                     syncmanager_lock, uids):
+def create_gmail_imapuid(db_session, uid, g_msgid, g_thrid, flags, labels,
+                         folder, acc):
     """
-    Add ImapUid entries only for (already-downloaded) messages.
-
-    If a message has already been downloaded via another folder, we only need
-    to add `ImapUid` accounting for the current folder. `Message` objects
-    etc. have already been created.
+    Creates a new ImapUid object & associates it with an existing Message.
 
     """
-    flags = crispin_client.flags(uids)
+    message = db_session.query(Message).join(ImapThread).filter(
+        ImapThread.g_thrid == g_thrid,
+        Message.g_thrid == g_thrid,
+        Message.g_msgid == g_msgid,
+        ImapThread.namespace_id == acc.namespace.id).one()
+    new_imapuid = ImapUid(account=acc, folder=folder,
+                          msg_uid=uid, message=message)
+    new_imapuid.update_imap_flags(flags, labels)
 
-    with syncmanager_lock:
-        log.debug('add_new_imapuids acquired syncmanager_lock')
-        # Since we prioritize download for messages in certain threads, we may
-        # already have ImapUid entries despite calling this method.
-        local_folder_uids = {uid for uid, in
-                             db_session.query(ImapUid.msg_uid).join(Folder)
-                             .filter(
-                                 ImapUid.account_id ==
-                                 crispin_client.account_id,
-                                 Folder.name ==
-                                 crispin_client.selected_folder_name,
-                                 ImapUid.msg_uid.in_(uids))}
-        uids = [uid for uid in uids if uid not in local_folder_uids]
+    message.is_draft = new_imapuid.is_draft
+    message.is_read = new_imapuid.is_seen
 
-        if uids:
-            acc = db_session.query(GmailAccount).get(crispin_client.account_id)
-
-            # collate message objects to relate the new imapuids to
-            imapuid_for = dict([(metadata.msgid, uid) for (uid, metadata)
-                                in remote_g_metadata.items()
-                                if uid in uids])
-            imapuid_g_msgids = [remote_g_metadata[uid].msgid for uid in uids]
-            message_for = dict([(imapuid_for[m.g_msgid], m) for m in
-                                db_session.query(Message).join(ImapThread)
-                                .filter(
-                                    Message.g_msgid.in_(imapuid_g_msgids),
-                                    ImapThread.namespace_id ==
-                                    acc.namespace.id)])
-
-            # Folder.find_or_create()'s query will otherwise trigger a flush.
-            with db_session.no_autoflush:
-                new_imapuids = [ImapUid(
-                    account=acc,
-                    folder=Folder.find_or_create(
-                        db_session, acc, crispin_client.selected_folder_name),
-                    msg_uid=uid, message=message_for[uid]) for uid in uids]
-                for item in new_imapuids:
-                    # skip uids which have disappeared in the meantime
-                    if item.msg_uid in flags:
-                        item.update_imap_flags(flags[item.msg_uid].flags,
-                                               flags[item.msg_uid].labels)
-            db_session.add_all(new_imapuids)
-            db_session.commit()
+    return new_imapuid
 
 
 def retrieve_saved_g_metadata(crispin_client, db_session, log, folder_name,
