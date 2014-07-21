@@ -28,7 +28,7 @@ __path__ = extend_path(__path__, __name__)
 
 from inbox.util.misc import register_backends
 
-module_registry = register_backends(__name__, __path__)
+from inbox.actions.backends import module_registry
 
 from sqlalchemy.orm.exc import NoResultFound, MultipleResultsFound
 
@@ -140,6 +140,7 @@ def delete_draft(account_id, draft_id):
     with session_scope() as db_session:
         account = db_session.query(Account).get(account_id)
         draft = db_session.query(SpoolMessage).get(draft_id)
+        import pdb ; pdb.set_trace()
         remote_delete_draft = \
             module_registry[account.provider].remote_delete_draft
         remote_delete_draft(account, account.drafts_folder.name,
