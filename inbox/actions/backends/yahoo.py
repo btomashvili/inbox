@@ -149,6 +149,7 @@ def remote_save_draft(account, folder_name, message, db_session, date=None):
 def remote_delete_draft(account, folder_name, inbox_uid, db_session):
     def fn(account, db_session, crispin_client):
         assert folder_name == crispin_client.folder_names()['drafts']
+        # FIXME @karim: forgot to make this work.
         db_session.query(SpoolMessage).options(joinedload("imapuids")).filter_by(public_id=inbox_uid).one()
         crispin_client.delete_draft(inbox_uid)
 
