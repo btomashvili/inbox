@@ -137,10 +137,9 @@ def save_draft(account_id, message_id):
 
 def delete_draft(account_id, draft_id):
     """ Delete a draft from the remote backend. """
-    with session_scope() as db_session:
+    with session_scope(ignore_soft_deletes=False) as db_session:
         account = db_session.query(Account).get(account_id)
         draft = db_session.query(SpoolMessage).get(draft_id)
-        import pdb ; pdb.set_trace()
         remote_delete_draft = \
             module_registry[account.provider].remote_delete_draft
         remote_delete_draft(account, account.drafts_folder.name,
