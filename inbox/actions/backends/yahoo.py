@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """ Operations for syncing back local datastore changes to Yahoo.
 
 See imap.py for notes about implementation.
@@ -149,7 +150,14 @@ def remote_save_draft(account, folder_name, message, db_session, date=None):
 def remote_delete_draft(account, folder_name, inbox_uid, db_session):
     def fn(account, db_session, crispin_client):
         assert folder_name == crispin_client.folder_names()['drafts']
-        db_session.query(SpoolMessage).options(joinedload("imapuids")).filter_by(public_id=inbox_uid).one()
-        crispin_client.delete_draft(inbox_uid)
+        # FIXME: this has an edge case because Yahoo doesn't support searching
+        # for messages having the X-INBOX header. We may run into race conditions
+        # if the message isn't reconciled yet.
+        message = db_session.query(SpoolMessage).filter_by(public_id=inbox_uid).one()
+        uids = []
+        for imapuid in message.resolved_message.imapuids:
+            uids.append(imapuid.msg_uid)
+
+        crispin_client.delete_uids(uids)
 
     return syncback_action(fn, account, folder_name, db_session)
