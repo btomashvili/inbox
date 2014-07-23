@@ -16,6 +16,7 @@ support for this later, but a lack of CONDSTORE makes it tricky / slow.)
 """
 from inbox.crispin import retry_crispin
 from inbox.models.util import reconcile_message
+from inbox.util.misc import cleanup_subject
 from inbox.models.backends.imap import ImapThread
 from inbox.mailsync.backends.imap import (account, base_poll, imap_poll_update,
                                           resync_uids_from, base_initial_sync,
@@ -79,13 +80,23 @@ def create_yahoo_message(db_session, log, acct, folder, msg):
 def add_yahoo_attrs(db_session, log, new_uid, flags, folder, created):
     """ Yahoo-specific post-create-message bits."""
     with db_session.no_autoflush:
-        new_uid.message.thread = ImapThread.from_yahoo_message(
-            db_session, new_uid.account.namespace, new_uid.message)
+        # FIXME: won't win code beauty pageants
+        parent_thread = None
+        clean_subject = cleanup_subject(new_uid.message.subject)
+        parent_threads = db_session.query(ImapThread).filter(ImapThread.subject.like(clean_subject)).all()
+
+        if parent_threads == []:
+            new_uid.message.thread = ImapThread.from_yahoo_message(
+                db_session, new_uid.account.namespace, new_uid.message)
+
+            if (folder.canonical_name in ('draft', 'sent') and not created
+                    and new_uid.message.inbox_uid):
+                reconcile_message(db_session, log, new_uid.message.inbox_uid,
+                                  new_uid.message)
+        else:
+            parent_thread = parent_threads[0]
+            parent_thread.messages.append(new_uid.message)
+            parent_thread.messages = sorted(parent_thread.messages, key=lambda x: x.received_date)
+
         new_uid.update_imap_flags(flags)
-
-        if (folder.canonical_name in (u'drafts', u'sent') and not created
-                and new_uid.message.inbox_uid):
-            reconcile_message(db_session, log, new_uid.message.inbox_uid,
-                              new_uid.message)
-
         return new_uid

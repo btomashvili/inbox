@@ -350,6 +350,7 @@ class Message(MailSyncBase, HasRevisions, HasPublicID):
 
         return plain_data, html_data
 
+    # FIXME @karim: doesn't work - refactor/i18n
     def trimmed_subject(self):
         s = self.subject
         if s[:4] == u'RE: ' or s[:4] == u'Re: ':

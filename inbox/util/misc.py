@@ -1,4 +1,4 @@
-import os, sys, pkgutil, time
+import os, sys, pkgutil, time, re
 from inbox.log import get_logger
 
 
@@ -71,6 +71,13 @@ def parse_references(references, in_reply_to):
     if replyto not in references:
         references += (separator + replyto)
     return references
+
+
+def cleanup_subject(subject_str):
+    """Clean-up a message subject-line.
+    For instance, 'Re: Re: Re: Birthday party' becomes 'Birthday party'"""
+    cleanup_regexp = "^((Re:|RE:|fwd:|FWD:)\s+)+"
+    return re.sub(cleanup_regexp, "", subject_str)
 
 
 def timed(fn):
