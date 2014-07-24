@@ -14,6 +14,7 @@ from sqlalchemy.interfaces import PoolListener
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.mutable import Mutable
 
+from inbox.config import config
 from inbox.util.encoding import base36encode, base36decode
 
 from inbox.log import get_logger
@@ -200,3 +201,10 @@ def safer_yield_per(query, id_field, start_id, count):
         for result in results:
             start_id = result.id + 1
             yield result
+
+
+def prefix_with_schema(column_name):
+    """Prefix a column name with the schema name. Probably only needed for
+    migrations and the like."""
+    schema = config.get_required('MYSQL_DATABASE')
+    return schema + '.' + column_name

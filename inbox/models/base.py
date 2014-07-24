@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, MetaData
 from sqlalchemy.ext.declarative import as_declarative, declared_attr
 
 from inbox.models.mixins import AutoTimestampMixin
+from inbox.config import config
 
 
 @as_declarative()
@@ -23,5 +24,4 @@ class Base(AutoTimestampMixin):
 
 class MailSyncBase(Base):
     __abstract__ = True
-    __table_args__ = {'schema': 'mailsync'}
-    metadata = MetaData()
+    metadata = MetaData(schema=config.get_required('MYSQL_DATABASE'))

@@ -42,7 +42,7 @@ class Tag(MailSyncBase, HasRevisions):
     # load_on_pending=True here so that setting Transaction.namespace in
     # Transaction.set_extra_attrs() doesn't raise an IntegrityError.)
     namespace_id = Column(Integer, ForeignKey(
-        'namespace.id', ondelete='CASCADE'), nullable=False)
+        Namespace.id, ondelete='CASCADE'), nullable=False)
 
     public_id = Column(String(MAX_INDEXABLE_LENGTH), nullable=False,
                        default=generate_public_id)
