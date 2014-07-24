@@ -6,6 +6,7 @@ from sqlalchemy.orm.exc import NoResultFound
 
 import sqlalchemy.orm.query
 
+from inbox.ignition import main_engine
 from inbox.log import get_logger
 log = get_logger()
 
@@ -179,9 +180,9 @@ def session_scope(versioned=True, ignore_soft_deletes=True, namespace_id=None):
 
     global cached_engine
     if cached_engine is None:
-        log.info("Don't yet have engine... creating default from ignition")
-        from inbox.ignition import engine as main_engine
-        cached_engine = main_engine
+        cached_engine = main_engine()
+        log.info("Don't yet have engine... creating default from ignition",
+                 engine=id(cached_engine))
 
     session = InboxSession(cached_engine,
                            versioned=versioned,

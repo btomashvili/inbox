@@ -39,7 +39,7 @@ def main(prod, config, processes):
         config_path = os.path.abspath(config)
         load_overrides(config_path)
 
-    preflight()
+    # preflight()
 
     log = get_logger()
     log.info('start',
