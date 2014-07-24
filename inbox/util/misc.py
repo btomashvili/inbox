@@ -66,11 +66,11 @@ def parse_references(references, in_reply_to):
     replyto = in_reply_to.split()[0] if in_reply_to else in_reply_to
 
     if not references:
-        return replyto
+        return [replyto]
 
-    separator = '\t'
+    references = references.split()
     if replyto not in references:
-        references += (separator + replyto)
+        references.append(replyto)
     return references
 
 
@@ -83,21 +83,15 @@ def cleanup_subject(subject_str):
 
 def thread_messages(messages_list):
     """Order a list of messages in a conversation (à la gmail)"""
-    in_reply_messages = [message for message in message_list if message.in_reply_to]
-    headerless_messages = [message for message in message_list if not message.in_reply_to]
-
-    def replyGrouper(message):
-        return (message.received_date, message.in_reply_to)
-
-    grouped_by_replies = sorted(messages_list, key=replyGrouper)
+    msgs_by_date = sorted(messages_list, key=lambda x: x.received_date)
+    l = []
+    for msg in msgs_by_date:
+        insert_message_in_thread(msg, l)
+    return l
 
 def insert_after(l, after_element, to_insert):
     index = l.index(after_element)
     l.insert(index + 1, to_insert)
-
-def insert_before(l, after_element, to_insert):
-    index = l.index(after_element)
-    l.insert(index, to_insert)
 
 def find_closest_sibling(l, to_insert):
     closest_sibling = None
@@ -110,11 +104,20 @@ def find_closest_sibling(l, to_insert):
 
     return closest_sibling
 
+def find_first_more_recent(l, to_insert):
+    for msg in l:
+        if msg.received_date > to_insert.received_date:
+            return msg
+    return None
+
+def insert_before(l, before_element, to_insert):
+    index = l.index(before_element)
+    l.insert(index, to_insert)
+
 
 def insert_message_in_thread(message, messages_list):
-    import pdb ; pdb.set_trace()
     if message.in_reply_to:
-        parent_messages = [message for message in messages_list if message.message_id_header == message.in_reply_to]
+        parent_messages = [msg for msg in messages_list if msg.message_id_header == msg.in_reply_to]
         if len(parent_messages) > 0:
             # We've found the corresponding message-id
             parent_message = parent_messages[0]
@@ -127,39 +130,52 @@ def insert_message_in_thread(message, messages_list):
                 insert_after(messages_list, parent_message, message)
                 return
             else:
-                closest_sibling = find_closest_sibling(direct_replies, message)
-                insert_after(messages_list, closest_sibling, message)
+                closest_sibling = find_first_more_recent(direct_replies, message)
+                if closest_sibling != None:
+                    insert_before(messages_list, closest_sibling, message)
+                else:
+                    messages_list.append(message)
                 return
 
         if len(message.references) > 1:
             # We couldn't find the message id but we have references. Let's try
             # to insert the message to the closest message-id we could find.
             for reference in reversed(message.references):
-                parent_messages = [message for message in messages_list if message.message_id_header == message.in_reply_to]
+                parent_messages = [msg for msg in messages_list if msg.message_id_header == reference]
                 if len(parent_messages) > 0:
-                    pass
+                    closest_sibling = find_first_more_recent(messages_list, parent_messages[0])
+                    if closest_sibling != None:
+                        insert_before(messages_list, closest_sibling, message)
+                    else:
+                        messages_list.append(message)
+                    return
 
-    if not message.in_reply_to and not message.references:
+        # couldn't find references either
+        closest_sibling = find_first_more_recent(messages_list, message)
+        if closest_sibling != None:
+            insert_before(messages_list, closest_sibling, message)
+        else:
+            # empty list or message received after everything else. Insert at the end.
+            messages_list.append(message)
+        return
+    elif message.references != []:
+        pass
+    else:
         # We've got a message without reply to information. It probably belongs next
         # to similar messages which occured at around the same time so we insert
         # the message next to the closest message with only one reference
 
-        direct_replies = [message for message in messages_list if len(message.references) < 2]
-        closest_sibling = find_closest_sibling(direct_replies, message)
+        direct_replies = [msg for msg in messages_list if len(msg.references) < 2]
+        closest_sibling = find_first_more_recent(direct_replies, message)
         if closest_sibling == None:
-            # The rest of the messages don't have references either.
+            # Can't find such a message.
             # We can only use dates in this case.
-            closest_sibling = find_closest_sibling(messages_list, message)
+            closest_sibling = find_first_more_recent(messages_list, message)
 
-        insert_after(messages_list, closest_sibling, message)
-    else:
-        # Message with reply to info
-        # Either we can find the message-id it's replying to or not
-        # if yes, we attach it next to this message-id, after the eventual
-        # replies to the same message
-        # otherwise we walk the reference chain and attach it to the closer
-        # message.
-        pass
+        if closest_sibling != None:
+            insert_before(messages_list, closest_sibling, message)
+        else:
+            messages_list.append(message)
 
 def timed(fn):
     """ A decorator for timing methods. """
